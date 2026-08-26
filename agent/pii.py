@@ -30,10 +30,61 @@ set ở tests/vn_pii_testset.jsonl):
 """
 from __future__ import annotations
 
+import re
+
+
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_CCCD_RE = re.compile(r"(?<!\d)\d{12}(?!\d)")
+_PHONE_CANDIDATE_RE = re.compile(r"(?<!\d)0[\d\s.\-]{8,14}\d(?!\d)")
+_BANK_RE = re.compile(r"(?<!\d)\d{8,16}(?!\d)")
+
 
 def detect(text: str) -> list[dict]:
-    raise NotImplementedError("BƯỚC 3a: implement PII detection")
+    entities: list[dict] = []
+
+    def overlaps(start: int, end: int) -> bool:
+        for item in entities:
+            if start < item["end"] and item["start"] < end:
+                return True
+        return False
+
+    def add(kind: str, start: int, end: int) -> None:
+        if start >= end:
+            return
+        if overlaps(start, end):
+            return
+        entities.append({"type": kind, "start": start, "end": end})
+
+    for match in _EMAIL_RE.finditer(text):
+        add("EMAIL", match.start(), match.end())
+
+    for match in _PHONE_CANDIDATE_RE.finditer(text):
+        raw = match.group(0)
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if digits.startswith("0") and 10 <= len(digits) <= 11:
+            add("VN_PHONE", match.start(), match.end())
+
+    for match in _BANK_RE.finditer(text):
+        raw = match.group(0)
+        if len(raw) == 12:
+            # 12-digit values are ambiguous with CCCD; only treat as bank
+            # account when explicit account context appears nearby.
+            context = text[max(0, match.start() - 24) : match.start()].lower()
+            if "stk" not in context and "tai khoan" not in context and "tài khoản" not in context:
+                continue
+        add("VN_BANK_ACCOUNT", match.start(), match.end())
+
+    for match in _CCCD_RE.finditer(text):
+        add("VN_CCCD", match.start(), match.end())
+
+    entities.sort(key=lambda item: (item["start"], item["end"]))
+    return entities
 
 
 def redact(text: str) -> str:
-    raise NotImplementedError("BƯỚC 3a: implement PII redaction")
+    entities = sorted(detect(text), key=lambda item: item["start"], reverse=True)
+    redacted = text
+    for entity in entities:
+        token = f"[REDACTED_{entity['type']}]"
+        redacted = redacted[: entity["start"]] + token + redacted[entity["end"] :]
+    return redacted
