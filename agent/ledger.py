@@ -33,12 +33,78 @@ rồi gọi verify() phải trả về False.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 
+_GENESIS = "0" * 64
+
+
+def _canonical_hash_payload(entry: dict) -> str:
+    payload = json.dumps(entry, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_last_hash(path: Path) -> str:
+    if not path.exists():
+        return _GENESIS
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        return _GENESIS
+    try:
+        last = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return _GENESIS
+    return str(last.get("hash", _GENESIS))
+
+
 def append(entry: dict, path: Path) -> dict:
-    raise NotImplementedError("BƯỚC 3d: implement ledger append")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prev_hash = _read_last_hash(path)
+
+    payload = dict(entry)
+    payload["prev_hash"] = prev_hash
+    payload_hash = _canonical_hash_payload(payload)
+    payload["hash"] = payload_hash
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    return payload
 
 
 def verify(path: Path) -> bool:
-    raise NotImplementedError("BƯỚC 3d: implement ledger verify")
+    if not path.exists():
+        return True
+
+    prev = _GENESIS
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                return False
+
+            reason = row.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                return False
+
+            if row.get("prev_hash") != prev:
+                return False
+
+            stored_hash = row.get("hash")
+            if not isinstance(stored_hash, str) or len(stored_hash) != 64:
+                return False
+
+            payload = dict(row)
+            payload.pop("hash", None)
+            recomputed = _canonical_hash_payload(payload)
+            if recomputed != stored_hash:
+                return False
+
+            prev = stored_hash
+
+    return True
