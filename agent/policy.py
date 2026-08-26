@@ -37,4 +37,23 @@ class PolicyContext:
 
 
 def check(context: PolicyContext) -> tuple[bool, str]:
-    raise NotImplementedError("BƯỚC 3b: implement policy check")
+    classification = (context.data_classification or "").strip().lower()
+    purpose = (context.request_purpose or "").strip()
+    owner = (context.agent_owner or "").strip()
+
+    if context.delegation_depth < 0:
+        return False, "deny: delegation_depth must be >= 0"
+
+    if not owner:
+        return False, "deny: missing agent_owner"
+
+    if not purpose:
+        return False, "deny: missing request_purpose"
+
+    if classification == "restricted" and context.egress_enabled:
+        return False, "deny: restricted data cannot egress"
+
+    if classification not in {"public", "internal", "restricted"}:
+        return False, f"deny: unknown data classification {classification!r}"
+
+    return True, "allow: policy checks passed"
